@@ -15,8 +15,9 @@ Requirements:
 Built with [Gradle 2.11](http://gradle.org).
 
 Twitter OAuth credentials must be available in a properties file based on the
-provided `twitter.properties-template` in the project's root directory. For further
-information see [http://twitter4j.org/en/configuration.html]()
+provided `twitter.properties-template` in the project's root directory. Support
+for running behind a proxy is also there, based on Twitter4J's support. For
+further information see [http://twitter4j.org/en/configuration.html]().
 
 ## To Build
 

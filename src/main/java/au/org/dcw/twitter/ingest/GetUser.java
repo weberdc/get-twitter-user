@@ -115,16 +115,23 @@ public final class GetUser {
         System.out.println("debug: " + debug);
         System.out.println();
 
-        Properties idProps = loadIdentityProperties(credentialsFile);
+        // TODO find a better name than credentials, given it might contain proxy info
+        Properties credentials = loadCredentials(credentialsFile);
 
         ConfigurationBuilder conf = new ConfigurationBuilder();
         conf.setJSONStoreEnabled(true)
             .setDebugEnabled(debug)
-            .setOAuthConsumerKey(idProps.getProperty("oauth.consumerKey"))
-            .setOAuthConsumerSecret(idProps.getProperty("oauth.consumerSecret"))
-            .setOAuthAccessToken(idProps.getProperty("oauth.accessToken"))
-            .setOAuthAccessTokenSecret(idProps.getProperty("oauth.accessTokenSecret"));
-        // TODO Add proxy properties?
+            .setOAuthConsumerKey(credentials.getProperty("oauth.consumerKey"))
+            .setOAuthConsumerSecret(credentials.getProperty("oauth.consumerSecret"))
+            .setOAuthAccessToken(credentials.getProperty("oauth.accessToken"))
+            .setOAuthAccessTokenSecret(credentials.getProperty("oauth.accessTokenSecret"));
+
+        if (credentials.containsKey("http.proxyHost")) {
+            conf.setHttpProxyHost(credentials.getProperty("http.proxyHost"))
+                .setHttpProxyPort(Integer.parseInt(credentials.getProperty("http.proxyPort")))
+                .setHttpProxyUser(credentials.getProperty("http.proxyUser"))
+                .setHttpProxyPassword(credentials.getProperty("http.proxyPassword"));
+        }
 
         Twitter twitter = new TwitterFactory(conf.build()).getInstance();
         String name = screenName == null ? "user " + userID : "@" + screenName;
@@ -205,7 +212,7 @@ public final class GetUser {
      * @return A {@link Properties} map with the contents of credentialsFile
      * @throws IOException if there's a problem reading the credentialsFile.
      */
-    private static Properties loadIdentityProperties(String credentialsFile) throws IOException {
+    private static Properties loadCredentials(String credentialsFile) throws IOException {
         Properties properties = new Properties();
         properties.load(Files.newBufferedReader(Paths.get(credentialsFile)));
         return properties;
