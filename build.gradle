@@ -1,0 +1,22 @@
+apply plugin: 'java'
+apply plugin: 'application'
+apply plugin: 'idea'
+
+mainClassName = 'au.org.dcw.twitter.ingest.GetUser'
+
+sourceCompatibility = 1.8
+targetCompatibility = 1.8
+
+jar {
+    baseName = 'twitter-ingest'
+    version =  '0.1'
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    compile("org.twitter4j:twitter4j-core:[4.0,)")
+    compile("com.beust:jcommander:[1.48,)")
+}
