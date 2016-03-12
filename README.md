@@ -9,8 +9,9 @@ tweets for a given user, specified by screen name or Twitter user identifier.
 
 Requirements:
  + Java 1.8
- + [twitter4j-core](http://twitter4j.org) 4.0+
- + [jcommander](http://jcommander.org) 1.48+
+ + [twitter4j-core](http://twitter4j.org) 4.0+ (Apache 2.0 licence)
+   + depends on [JSON](http://json.org) ([JSON licence](http://www.json.org/license.html))
+ + [jcommander](http://jcommander.org) 1.48+ (Apache 2.0 licence)
 
 Built with [Gradle 2.11](http://gradle.org).
 
