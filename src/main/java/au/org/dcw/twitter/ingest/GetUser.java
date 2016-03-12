@@ -108,10 +108,12 @@ public final class GetUser {
         if (screenName != null && screenName.startsWith("@"))
             screenName =  screenName.substring(1);
 
+        System.out.println("== Configuration ==");
         System.out.println("screenName: " + screenName);
         System.out.println("userID: " + userID);
         System.out.println("identity: " + credentialsFile);
         System.out.println("debug: " + debug);
+        System.out.println();
 
         Properties idProps = loadIdentityProperties(credentialsFile);
 
@@ -122,6 +124,7 @@ public final class GetUser {
             .setOAuthConsumerSecret(idProps.getProperty("oauth.consumerSecret"))
             .setOAuthAccessToken(idProps.getProperty("oauth.accessToken"))
             .setOAuthAccessTokenSecret(idProps.getProperty("oauth.accessTokenSecret"));
+        // TODO Add proxy properties?
 
         Twitter twitter = new TwitterFactory(conf.build()).getInstance();
         String name = screenName == null ? "user " + userID : "@" + screenName;

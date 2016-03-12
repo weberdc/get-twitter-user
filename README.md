@@ -27,7 +27,7 @@ By running
 you will create an installable copy of the app in `PROJECT_ROOT/build/get-twitter-user`.
 
 ## Usage
-From within `PROJECT_ROOT/build/get-twitter-user`:
+From within `PROJECT_ROOT/build/install/get-twitter-user`:
 ```
 Usage: bin/get-twitter-user[.bat] [options]
   Options:
