@@ -25,10 +25,10 @@ import java.util.Properties;
 
 /**
  * Application that gets public timeline and profile for a Twitter user based
- * on their screen name and stores the raw JSON responses into the local "output"
- * directory, with the same name as the.<br>
+ * on their screen name and stores the raw JSON responses into the
+ * {@link #rootOutputDir} directory, with the same name as the {@link #screenName}.<p>
  *
- * Borrows heavily from the Twitter4j example:
+ * Borrows heavily from the <a href="http://twitter4j.org">Twitter4j</a> example:
  * @see <a href="https://github.com/yusuke/twitter4j/blob/master/twitter4j-examples/src/main/java/twitter4j/examples/json/SaveRawJSON.java">SaveRawJSON.java</a></a>
  */
 public final class GetUser {
@@ -38,7 +38,7 @@ public final class GetUser {
     @Parameter(names = { "-s", "--screen-name" }, description = "Twitter screen name")
     private String screenName;
 
-    @Parameter(names = { "-u", "--user-id" }, description = "Twitter user ID")
+    @Parameter(names = { "-u", "--user-id" }, description = "Twitter user ID (@ symbol optional)")
     private Long userID;
 
     @Parameter(names = { "-o", "--output" }, description = "Directory to which to write output")
@@ -71,25 +71,39 @@ public final class GetUser {
      * @param args Command line arguments
      */
     public static void main(String[] args) throws IOException {
-        GetUser app = new GetUser();
+        GetUser theApp = new GetUser();
 
-        JCommander argsParser = new JCommander(app, args);
+        JCommander argsParser = new JCommander(theApp, args);
 
-        checkFields(app, argsParser);
-
-        app.run();
-    }
-
-    private static void checkFields(GetUser app, JCommander argsParser) {
-        if (app.screenName == null && app.userID == null) {
-            System.out.println("Error: screen name or twitter ID must be supplied");
+        if (! checkFieldsOf(theApp)) {
             StringBuilder sb = new StringBuilder();
             argsParser.usage(sb);
             System.out.println(sb.toString());
             System.exit(-1);
         }
+
+        theApp.run();
     }
 
+    /**
+     * Checks to see if commandline argument constraints have been met.
+     *
+     * @param app the app the fields of which to check
+     */
+    private static boolean checkFieldsOf(GetUser app) {
+        if (app.screenName == null && app.userID == null) {
+            System.out.println("Error: screen name or twitter ID must be supplied");
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * Runs the app, collecting profile, tweets and favourites for the user {@link #screenName}
+     * from twitter.com and writing them out as raw JSON to {@link #rootOutputDir}.
+     *
+     * @throws IOException if there's a problem talking to Twitter or writing JSON out.
+     */
     public void run() throws IOException {
         if (screenName != null && screenName.startsWith("@"))
             screenName =  screenName.substring(1);
@@ -181,12 +195,26 @@ public final class GetUser {
         }
     }
 
-    private static Properties loadIdentityProperties(String propertiesFile) throws IOException {
+    /**
+     * Loads the given {@code credentialsFile} from disk.
+     *
+     * @param credentialsFile the properties file with the Twitter credentials in it
+     * @return A {@link Properties} map with the contents of credentialsFile
+     * @throws IOException if there's a problem reading the credentialsFile.
+     */
+    private static Properties loadIdentityProperties(String credentialsFile) throws IOException {
         Properties properties = new Properties();
-        properties.load(Files.newBufferedReader(Paths.get(propertiesFile)));
+        properties.load(Files.newBufferedReader(Paths.get(credentialsFile)));
         return properties;
     }
 
+    /**
+     * Writes the given {@code rawJSON} {@link String} to the specified file.
+     *
+     * @param rawJSON the JSON String to persist
+     * @param fileName the file (including path) to which to write the JSON
+     * @throws IOException if there's a problem writing to the specified file
+     */
     private static void saveJSON(String rawJSON, String fileName) throws IOException {
         try (FileOutputStream fos = new FileOutputStream(fileName);
              OutputStreamWriter osw = new OutputStreamWriter(fos, "UTF-8");
