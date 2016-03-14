@@ -256,14 +256,15 @@ public final class GetUser {
 
     private int fetchMedia(Map<Long, Set<String>> mediaUrls, String mediaDir) {
         int fetched = 0;
-        int tweetCount = 1;
+        int tweetCount = 0;
         for (Map.Entry<Long, Set<String>> mediaUrl : mediaUrls.entrySet()) {
             Long id = mediaUrl.getKey();
             Set<String> urls = mediaUrl.getValue();
+            tweetCount++;
             int mediaCount = 1;
             for (String urlStr : urls) {
                 urlStr = tweak(urlStr);
-                System.out.printf("GET MEDIA %d/%d FROM %s ...", tweetCount++, mediaUrls.size(), urlStr);
+                System.out.printf("GET MEDIA %d/%d FROM %s ...", tweetCount, mediaUrls.size(), urlStr);
                 String ext = urlStr.substring(urlStr.lastIndexOf('.') + 1);
                 String filename = id + "-" + (mediaCount++);
                 try {
@@ -356,10 +357,8 @@ public final class GetUser {
     }
 
     private void associateURLsWithTweet(Map<Long, Set<String>> mediaToFetch, Status status, Set<String> urls) {
-        for (String url : urls) {
-            mediaToFetch.putIfAbsent(status.getId(), new TreeSet<String>());
-            mediaToFetch.get(status.getId()).add(url);
-        }
+        mediaToFetch.putIfAbsent(status.getId(), new TreeSet<String>());
+        mediaToFetch.get(status.getId()).addAll(urls);
     }
 
     private Set<String> collectMentionedURLs(Status status) {
