@@ -32,6 +32,7 @@ import twitter4j.TwitterFactory;
 import twitter4j.TwitterObjectFactory;
 import twitter4j.URLEntity;
 import twitter4j.User;
+import twitter4j.conf.Configuration;
 import twitter4j.conf.ConfigurationBuilder;
 
 import java.awt.image.BufferedImage;
@@ -43,7 +44,7 @@ import java.io.OutputStreamWriter;
 import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Paths;
-import java.time.Instant;
+import java.util.Date;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
@@ -55,8 +56,9 @@ import javax.imageio.ImageIO;
 
 
 /**
- * Application that gets public timeline and profile for a Twitter user based on their screen name and stores the raw JSON responses into the {@link
- * #rootOutputDir} directory, with the same name as the {@link #screenName}.<p>
+ * Application that gets public timeline and profile for a Twitter user based
+ * on their screen name and stores the raw JSON responses into the
+ * {@link #rootOutputDir} directory, with the same name as the {@link #screenName}.<p>
  *
  * Borrows heavily from the <a href="http://twitter4j.org">Twitter4j</a> example:
  *
@@ -88,6 +90,9 @@ public final class GetUser {
     @Parameter(names = {"-f", "--include-favourite-media"}, description = "Include media from favourite tweets")
     private boolean includeFaveMedia = false;
 
+    /**
+     * Listener to pay attention to when the Twitter's rate limit is being approached or breached.
+     */
     RateLimitStatusListener rateLimitStatusListener = new RateLimitStatusListener() {
         @Override
         public void onRateLimitStatus(RateLimitStatusEvent event) {
@@ -100,6 +105,12 @@ public final class GetUser {
         }
     };
 
+    /**
+     * If the provided {@link RateLimitStatus} indicates that we are about to break the rate
+     * limit, in terms of number of calls or time window, then sleep for the rest of the period.
+     *
+     * @param status The current status of the our calls to Twitter
+     */
     protected void pauseIfNecessary(RateLimitStatus status) {
         if (status == null)
             return;
@@ -108,7 +119,7 @@ public final class GetUser {
         int callsRemaining = status.getRemaining();
         if (secondsUntilReset < 10 || callsRemaining < 10) {
             int untilReset = status.getSecondsUntilReset() + 5;
-            System.out.println("Rate limit reached. Waiting " + untilReset + " seconds starting at " + Instant.now() + "...");
+            System.out.println("Rate limit reached. Waiting " + untilReset + " seconds starting at " + new Date() + "...");
             try {
                 Thread.sleep(untilReset * 1000);
             } catch (InterruptedException e) {
@@ -119,10 +130,27 @@ public final class GetUser {
     }
 
     /**
-     * Usage: java au.org.dcw.twitter.ingest.GetUser [options] Options: -c, --credentials Properties file with Twitter OAuth credentials Default:
-     * ./twitter.properties -f, --include-favourite-media Include media from favourite tweets Default: false -i, --include-media Include media from tweets
-     * Default: false -o, --output Directory to which to write output Default: ./output -s, --screen-name Twitter screen name -u, --user-id Twitter user ID
-     * -debug Debug mode Default: false
+     * Usage: java au.org.dcw.twitter.ingest.GetUser [options]
+     * Options:
+     *   -c, --credentials
+     *      Properties file with Twitter OAuth credentials
+     *      Default: ./twitter.properties
+     *   -f, --include-favourite-media
+     *      Include media from favourite tweets
+     *      Default: false
+     *   -i, --include-media
+     *      Include media from tweets
+     *      Default: false
+     *   -o, --output
+     *      Directory to which to write output
+     *      Default: ./output
+     *   -s, --screen-name
+     *      Twitter screen name
+     *   -u, --user-id
+     *      Twitter user ID
+     *   -debug
+     *      Debug mode
+     *      Default: false
      *
      * @param args Command line arguments
      */
@@ -155,16 +183,90 @@ public final class GetUser {
     }
 
     /**
-     * Runs the app, collecting profile, tweets and favourites for the user {@link #screenName} from twitter.com and writing them out as raw JSON to {@link
-     * #rootOutputDir}.
+     * Runs the app, collecting profile, tweets and favourites for the user {@link #screenName}
+     * from twitter.com and writing them out as raw JSON to {@link #rootOutputDir}.
      *
      * @throws IOException if there's a problem talking to Twitter or writing JSON out.
      */
     public void run() throws IOException {
+        // clean screenName of a leading @ symbol
         if (screenName != null && screenName.startsWith("@")) {
             screenName = screenName.substring(1);
         }
 
+        reportConfiguration();
+
+        Twitter twitter = new TwitterFactory(buildTwitterConfiguration()).getInstance();
+        twitter.addRateLimitStatusListener(rateLimitStatusListener);
+
+        String name = screenName == null ? "user " + userID : "@" + screenName;
+        System.out.println("Saving profile and timeline for " + name + ".");
+
+        try {
+            // Determine the user's screen name
+            User user = fetchProfile(twitter);
+
+            // Use that to set up the output directories
+            String userDir = rootOutputDir + "/" + screenName;
+            new File(userDir).mkdirs();
+
+            // Write out the user's profile
+            saveJSON(TwitterObjectFactory.getRawJSON(user), userDir + "/profile.json");
+
+            if (user.isProtected()) {
+                System.out.println("User @" + screenName + " is protected.");
+                System.exit(0);
+            }
+
+            Map<Long, Set<String>> mediaToFetch = new TreeMap<>();
+            Map<Long, Set<String>> urlsMentioned = new TreeMap<>();
+
+            // Retrieve and store status updates, as many as possible, one per file
+            int tweetCount = fetchTweets(twitter, userDir + "/tweets", urlsMentioned, mediaToFetch);
+
+            // Retrieve favourites
+            int faveCount = fetchFavourites(twitter, userDir + "/favourites", urlsMentioned, mediaToFetch);
+
+            // Write out the mentioned URLs
+            ObjectMapper json = new ObjectMapper();
+            saveJSON(json.writeValueAsString(urlsMentioned), userDir + "/urls_mentioned.json");
+
+            // Retrieve media
+            int mediaCount = fetchMedia(mediaToFetch, userDir + "/media");
+
+            // Report findings
+            reportFindings(userDir, tweetCount, faveCount, mediaCount);
+
+        } catch (IOException ioe) {
+            ioe.printStackTrace();
+            System.out.println("Failed to store JSON: " + ioe.getMessage());
+        } catch (TwitterException te) {
+            te.printStackTrace();
+            System.out.println("Failed to get timeline: " + te.getMessage());
+            System.exit(-1);
+        }
+    }
+
+    /**
+     * Reports what was found.
+     *
+     * @param userDir    the directory to which results have been written
+     * @param tweetCount the number of the user's tweets retrieved
+     * @param faveCount  the number of the user's favourites retrieved
+     * @param mediaCount the number of URLs mentioned which referred to media which were successfully downloaded
+     */
+    private void reportFindings(String userDir, int tweetCount, int faveCount, int mediaCount) {
+        System.out.printf("\nUser @%s (%s)\n", screenName, userID.toString());
+        System.out.println(" - tweets: " + tweetCount);
+        System.out.println(" - favourites: " + faveCount);
+        System.out.println(" - media: " + mediaCount);
+        System.out.println("Written to " + userDir);
+    }
+
+    /**
+     * An introductory report to stdout, highlighting the configuration to be used.
+     */
+    private void reportConfiguration() {
         System.out.println("== Configuration ==");
         System.out.println("screenName: " + screenName);
         System.out.println("userID: " + userID);
@@ -173,7 +275,16 @@ public final class GetUser {
         System.out.println("fave media: " + includeFaveMedia);
         System.out.println("debug: " + debug);
         System.out.println();
+    }
 
+    /**
+     * Builds the {@link Configuration} object with which to connect to Twitter, including
+     * credentials and proxy information if it's specified.
+     *
+     * @return a Twitter4j {@link Configuration} object
+     * @throws IOException if there's an error loading the application's {@link #credentialsFile}.
+     */
+    private Configuration buildTwitterConfiguration() throws IOException {
         // TODO find a better name than credentials, given it might contain proxy info
         Properties credentials = loadCredentials(credentialsFile);
 
@@ -192,69 +303,19 @@ public final class GetUser {
                 .setHttpProxyPassword(credentials.getProperty("http.proxyPassword"));
         }
 
-        Twitter twitter = new TwitterFactory(conf.build()).getInstance();
-        twitter.addRateLimitStatusListener(rateLimitStatusListener);
-
-        String name = screenName == null ? "user " + userID : "@" + screenName;
-        System.out.println("Saving profile and timeline for " + name + ".");
-
-        try {
-            // Determine the user's screen name
-            User user = fetchProfile(twitter);
-
-            if (user.isProtected()) {
-                System.out.println("User @" + screenName + " is protected.");
-                System.exit(0);
-            }
-
-            // Use that to set up the output directories
-            String userDir = rootOutputDir + "/" + screenName;
-            String statusesDir = userDir + "/tweets";
-            String favesDir = userDir + "/favourites";
-            String mediaDir = userDir + "/media";
-            new File(rootOutputDir).mkdirs();
-            new File(userDir).mkdirs();
-            new File(statusesDir).mkdirs();
-            new File(favesDir).mkdirs();
-            new File(mediaDir).mkdirs();
-
-            // Write out the user's profile
-            saveJSON(TwitterObjectFactory.getRawJSON(user), userDir + "/profile.json");
-
-            Map<Long, Set<String>> mediaToFetch = new TreeMap<>();
-            Map<Long, Set<String>> urlsMentioned = new TreeMap<>();
-
-            // Retrieve and store status updates, as many as possible, one per file
-            int tweetCount = fetchTweets(twitter, statusesDir, urlsMentioned, mediaToFetch);
-
-            // Retrieve favourites
-            int faveCount = fetchFavourites(twitter, favesDir, urlsMentioned, mediaToFetch);
-
-            // Write out the mentioned URLs
-            ObjectMapper json = new ObjectMapper();
-            saveJSON(json.writeValueAsString(urlsMentioned), userDir + "/urls_mentioned.json");
-
-            // Retrieve media
-            int mediaCount = fetchMedia(mediaToFetch, mediaDir);
-
-            // Report findings
-            System.out.printf("\nUser @%s (%s)\n", screenName, userID.toString());
-            System.out.println(" - tweets: " + tweetCount);
-            System.out.println(" - favourites: " + faveCount);
-            System.out.println(" - media: " + mediaCount);
-            System.out.println("Written to " + userDir);
-
-        } catch (IOException ioe) {
-            ioe.printStackTrace();
-            System.out.println("Failed to store JSON: " + ioe.getMessage());
-        } catch (TwitterException te) {
-            te.printStackTrace();
-            System.out.println("Failed to get timeline: " + te.getMessage());
-            System.exit(-1);
-        }
+        return conf.build();
     }
 
+    /**
+     * Fetches as many of the {@code mediaUrls} as possible to {@code mediaDir}.
+     *
+     * @param mediaUrls the URLs of potential media files
+     * @param mediaDir  the directory to which to write the media files
+     * @return the number of URLs that referred to media which were successfully downloaded
+     */
     private int fetchMedia(Map<Long, Set<String>> mediaUrls, String mediaDir) {
+        new File(mediaDir).mkdirs();
+
         int fetched = 0;
         int tweetCount = 0;
         for (Map.Entry<Long, Set<String>> mediaUrl : mediaUrls.entrySet()) {
@@ -281,6 +342,12 @@ public final class GetUser {
         return fetched;
     }
 
+    /**
+     * Opportunity to modify known URLs to make it easier to acces the media to which they refer.
+     *
+     * @param urlStr the original URL string
+     * @return a potentially modified URL string
+     */
     private String tweak(String urlStr) {
         if (urlStr.matches("^https?\\:\\/\\/imgur.com\\/")) {
             // e.g. "https://imgur.com/gallery/vLPhaca" to "https://i.imgur.com/vLPhaca.gif"
@@ -290,12 +357,27 @@ public final class GetUser {
         return urlStr;
     }
 
-    private int fetchTweets(Twitter twitter, String statusesDir, Map<Long, Set<String>> urlsMentioned, Map<Long, Set<String>> mediaToFetch) throws TwitterException, IOException {
+    /**
+     * Fetch the tweets of the user and save them to the {@code tweetsDir}. Also records URLs
+     * mentioned, and specifically ones that refer to media.
+     *
+     * @param twitter       the Twitter API instance
+     * @param tweetsDir     the directory to which to save tweets
+     * @param urlsMentioned a map of tweet ID to a set of URLs mentioned to update
+     * @param mediaToFetch  a map of tweet ID to a set of URLs to media mentioned to update
+     * @return the number of tweets successfully retrieved and saved
+     * @throws TwitterException if an error occurs talking to the Twitter API
+     * @throws IOException if an error occurs talking to the network or the file system
+     */
+    private int fetchTweets(Twitter twitter, String tweetsDir, Map<Long, Set<String>> urlsMentioned,
+                            Map<Long, Set<String>> mediaToFetch) throws TwitterException, IOException {
+        new File(tweetsDir).mkdirs();
+
         int i = 1, tweetCount = 0;
         List<Status> tweets = twitter.getUserTimeline(screenName, new Paging(i++, TWEET_BATCH_SIZE));
         while (tweets.size() > 0) {
             pauseIfNecessary(tweets.get(0).getRateLimitStatus());
-            processTweets(statusesDir, urlsMentioned, mediaToFetch, tweets, includeMedia);
+            processTweets(tweets, tweetsDir, urlsMentioned, mediaToFetch, includeMedia);
             tweetCount += tweets.size();
             System.out.println(tweetCount + " tweets retrieved...");
             tweets = twitter.getUserTimeline(screenName, new Paging(i++, TWEET_BATCH_SIZE));
@@ -303,13 +385,28 @@ public final class GetUser {
         return tweetCount;
     }
 
-    private int fetchFavourites(Twitter twitter, String favesDir, Map<Long, Set<String>> urlsMentioned, Map<Long, Set<String>> mediaToFetch) throws TwitterException, IOException {
+    /**
+     * Fetch the favourite tweets of the user and save them to the {@code favesDir}. Also
+     * records URLs mentioned, and specifically ones that refer to media.
+     *
+     * @param twitter       the Twitter API instance
+     * @param favesDir      the directory to which to save favourited tweets
+     * @param urlsMentioned a map of tweet ID to a set of URLs mentioned to update
+     * @param mediaToFetch  a map of tweet ID to a set of URLs to media mentioned to update
+     * @return the number of tweets successfully retrieved and saved
+     * @throws TwitterException if an error occurs talking to the Twitter API
+     * @throws IOException if an error occurs talking to the network or the file system
+     */
+    private int fetchFavourites(Twitter twitter, String favesDir, Map<Long, Set<String>> urlsMentioned,
+                                Map<Long, Set<String>> mediaToFetch) throws TwitterException, IOException {
+        new File(favesDir).mkdirs();
+
         int i = 1;
         int faveCount = 0;
         List<Status> faves = twitter.getFavorites(screenName, new Paging(i++, TWEET_BATCH_SIZE));
         while (faves.size() > 0) {
             pauseIfNecessary(faves.get(0).getRateLimitStatus());
-            processTweets(favesDir, urlsMentioned, mediaToFetch, faves, includeFaveMedia);
+            processTweets(faves, favesDir, urlsMentioned, mediaToFetch, includeFaveMedia);
             faveCount += faves.size();
             System.out.println(faveCount + " favourite tweets retrieved...");
             faves = twitter.getFavorites(screenName, new Paging(i++, TWEET_BATCH_SIZE));
@@ -317,31 +414,53 @@ public final class GetUser {
         return faveCount;
     }
 
-    private void processTweets(String favesDir, Map<Long, Set<String>> urlsMentioned, Map<Long, Set<String>> mediaToFetch, List<Status> faves,
-                               boolean inclMediaUrls) throws IOException {
-        for (Status tweet : faves) {
+    /**
+     * Process the {@code tweets} and save them to the {@code tweetsDir}. Also
+     * records URLs mentioned, and specifically ones that refer to media if
+     * {@code inclMediaURLs} is true.
+     *
+     * @param tweets        the tweets to process
+     * @param tweetsDir     the directory in which to store tweets
+     * @param urlsMentioned a map of tweet ID to a set of URLs mentioned to update
+     * @param mediaToFetch  a map of tweet ID to a set of URLs to media mentioned to update
+     * @param inclMediaURLs if true, tweets will be examined for attached media
+     * @throws IOException if an error occurs writing to the file system
+     */
+    private void processTweets(List<Status> tweets, String tweetsDir, Map<Long, Set<String>> urlsMentioned, Map<Long,
+                               Set<String>> mediaToFetch, boolean inclMediaURLs)
+        throws IOException {
+        new File(tweetsDir).mkdirs(); // make sure
+
+        for (Status tweet : tweets) {
             String rawJSON = TwitterObjectFactory.getRawJSON(tweet);
-            String fileName = favesDir + "/" + tweet.getId() + ".json";
+            String fileName = tweetsDir + "/" + tweet.getId() + ".json";
             saveJSON(rawJSON, fileName);
 
-            associateURLsWithTweet(urlsMentioned, tweet, collectMentionedURLs(tweet));
-            if (inclMediaUrls) {
-                collectMediaURLs(mediaToFetch, tweet);
+            associateURLsWithTweet(tweet, collectMentionedURLs(tweet), urlsMentioned);
+            if (inclMediaURLs) {
+                collectMediaURLs(tweet, mediaToFetch);
             }
         }
     }
 
-    private void collectMediaURLs(Map<Long, Set<String>> mediaToFetch, Status status) {
-        Set<String> urls = collectMentionedURLs(status);
+    /**
+     * Look for all URLs in the given Tweet in case they refer to media of some kind,
+     * and add them to the {@code mediaURLs} map.
+     *
+     * @param tweet     the Tweet to examine
+     * @param mediaURLs a map of Tweet IDs to a sets of URLs
+     */
+    private void collectMediaURLs(Status tweet, Map<Long, Set<String>> mediaURLs) {
+        Set<String> urls = collectMentionedURLs(tweet);
 
-        if (status.getMediaEntities().length > 0) {
-            for (MediaEntity entity : status.getMediaEntities()) {
+        if (tweet.getMediaEntities().length > 0) {
+            for (MediaEntity entity : tweet.getMediaEntities()) {
                 urls.add(entity.getMediaURLHttps());
             }
         }
 
-        if (status.getExtendedMediaEntities().length > 0) {
-            for (ExtendedMediaEntity entity : status.getExtendedMediaEntities()) {
+        if (tweet.getExtendedMediaEntities().length > 0) {
+            for (ExtendedMediaEntity entity : tweet.getExtendedMediaEntities()) {
                 switch (entity.getType()) {
                     case "video":
                         urls.add(entity.getVideoVariants()[0].getUrl());
@@ -353,24 +472,48 @@ public final class GetUser {
             }
         }
 
-        associateURLsWithTweet(mediaToFetch, status, urls);
+        associateURLsWithTweet(tweet, urls, mediaURLs);
     }
 
-    private void associateURLsWithTweet(Map<Long, Set<String>> mediaToFetch, Status status, Set<String> urls) {
-        mediaToFetch.putIfAbsent(status.getId(), new TreeSet<String>());
-        mediaToFetch.get(status.getId()).addAll(urls);
+    /**
+     * Convenience method to add a new URL to the set of URLs associated with the given
+     * {@code tweet} in the given map.
+     *
+     * @param tweet     the source of the URLs
+     * @param urls      the extracted URLs
+     * @param mediaURLs a map of Long (Tweet ID) to set of Strings (URLs)
+     */
+    private void associateURLsWithTweet(Status tweet, Set<String> urls, Map<Long, Set<String>> mediaURLs) {
+        mediaURLs.putIfAbsent(tweet.getId(), new TreeSet<String>());
+        mediaURLs.get(tweet.getId()).addAll(urls);
     }
 
-    private Set<String> collectMentionedURLs(Status status) {
+    /**
+     * A convenience method to collect the URLs mentioned in {@code tweet} and return
+     * them in a set.
+     *
+     * @param tweet a Tweet, perhaps containing URLs
+     * @return the set of URL strings mentioned in the tweet
+     */
+    private Set<String> collectMentionedURLs(Status tweet) {
         Set<String> urls = new TreeSet<>();
-        if (status.getURLEntities().length > 0) {
-            for (URLEntity entity : status.getURLEntities()) {
+        if (tweet.getURLEntities().length > 0) {
+            for (URLEntity entity : tweet.getURLEntities()) {
                 urls.add(entity.getExpandedURL());
             }
         }
         return urls;
     }
 
+    /**
+     * Fetches the profile for a given user using the Twitter API object and using
+     * {@link #screenName} or {@link #userID} to do it. The field not used for lookup
+     * is populated after the profile is found.
+     *
+     * @param twitter the Twitter API object
+     * @return the Twitter4j {@link User profile} of the specified user
+     * @throws TwitterException if an error occurs talking to Twitter
+     */
     private User fetchProfile(Twitter twitter) throws TwitterException {
         User user = null;
         if (screenName != null) {

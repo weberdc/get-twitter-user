@@ -36,6 +36,12 @@ Usage: bin/get-twitter-user[.bat] [options]
      -c, --credentials
          Properties file with Twitter OAuth credential
          Default: ./twitter.properties
+     -f, --include-favourite-media
+         Include media from favourite tweets
+         Default: false
+     -i, --include-media
+         Include media from tweets
+         Default: false
      -o, --output
          Directory to which to write output
          Default: ./output
@@ -54,6 +60,8 @@ a directory `output/weberdc` and download:
  + `@weberdc`'s profile to `output/weberdc/profile.json`
  + `@weberdc`'s tweets, one per file, to `output/weberdc/statuses/`
  + `@weberdc`'s favourited tweets, one per file, to `output/weberdc/favourites`
+ + `@weberdc`'s images and other media mentioned, to `output/weberdc/media`
 
-No attempt to address Twitter's rate limits or handle protected accounts is made.
-The app will simply crash.
+Attempts have been made to account for Twitter's rate limits, so at times the
+app will pause, waiting until the rate limit has refreshed. It reports how long
+it will wait.
