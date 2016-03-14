@@ -35,4 +35,6 @@ repositories {
 dependencies {
     compile("org.twitter4j:twitter4j-core:[4.0,)")
     compile("com.beust:jcommander:[1.48,)")
+    compile("com.fasterxml.jackson.core:jackson-core:2.7.2")
+    compile("com.fasterxml.jackson.core:jackson-databind:2.7.2")
 }
