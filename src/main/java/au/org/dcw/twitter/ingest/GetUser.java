@@ -560,10 +560,15 @@ public final class GetUser {
         Properties properties = new Properties();
         String proxyFile = "./proxy.properties";
         if (new File(proxyFile).exists()) {
+            boolean success = true;
             try (Reader fileReader = Files.newBufferedReader(Paths.get(proxyFile))) {
                 properties.load(fileReader);
             } catch (IOException e) {
                 System.err.println("Attempted and failed to load " + proxyFile + ": " + e.getMessage());
+                success = false;
+            }
+            if (success && !properties.containsKey("http.proxyPassword")) {
+                System.console().readPassword("Please type in your proxy password: ");
             }
         }
         return properties;
