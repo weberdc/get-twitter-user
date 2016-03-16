@@ -1,0 +1,8 @@
+# HTTP proxy server host name
+#http.proxyHost = my-proxy.mydomain.com
+#HTTP proxy server port
+#http.proxyPort = 8080
+# HTTP proxy server user name
+#http.proxyUser = my-proxy-username
+# HTTP proxy server password
+#http.proxyPassword = my-proxy-password

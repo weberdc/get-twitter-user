@@ -41,6 +41,7 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStreamWriter;
+import java.io.Reader;
 import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Paths;
@@ -296,11 +297,12 @@ public final class GetUser {
             .setOAuthAccessToken(credentials.getProperty("oauth.accessToken"))
             .setOAuthAccessTokenSecret(credentials.getProperty("oauth.accessTokenSecret"));
 
-        if (credentials.containsKey("http.proxyHost")) {
-            conf.setHttpProxyHost(credentials.getProperty("http.proxyHost"))
-                .setHttpProxyPort(Integer.parseInt(credentials.getProperty("http.proxyPort")))
-                .setHttpProxyUser(credentials.getProperty("http.proxyUser"))
-                .setHttpProxyPassword(credentials.getProperty("http.proxyPassword"));
+        Properties proxies = loadProxyProperties();
+        if (proxies.containsKey("http.proxyHost")) {
+            conf.setHttpProxyHost(proxies.getProperty("http.proxyHost"))
+                .setHttpProxyPort(Integer.parseInt(proxies.getProperty("http.proxyPort")))
+                .setHttpProxyUser(proxies.getProperty("http.proxyUser"))
+                .setHttpProxyPassword(proxies.getProperty("http.proxyPassword"));
         }
 
         return conf.build();
@@ -538,6 +540,19 @@ public final class GetUser {
     private static Properties loadCredentials(String credentialsFile) throws IOException {
         Properties properties = new Properties();
         properties.load(Files.newBufferedReader(Paths.get(credentialsFile)));
+        return properties;
+    }
+
+    private static Properties loadProxyProperties() {
+        Properties properties = new Properties();
+        String proxyFile = "./proxy.properties";
+        if (new File(proxyFile).exists()) {
+            try (Reader fileReader = Files.newBufferedReader(Paths.get(proxyFile))) {
+                properties.load(fileReader);
+            } catch (IOException e) {
+                System.err.println("Attempted and failed to load " + proxyFile + ": " + e.getMessage());
+            }
+        }
         return properties;
     }
 
