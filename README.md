@@ -2,13 +2,13 @@
 
 Author: **Derek Weber** (with many thanks to [http://twitter4j.org]() examples)
 
-Last updated: **2016-03-12**
+Last updated: **2016-03-17**
 
 Simple app to retrieve the profile, tweets (as many as possible), and favourited
 tweets for a given user, specified by screen name or Twitter user identifier.
 
 Requirements:
- + Java 1.8
+ + Java Development Kit 1.8
  + [twitter4j-core](http://twitter4j.org) (Apache 2.0 licence)
    + depends on [JSON](http://json.org) ([JSON licence](http://www.json.org/license.html))
  + [FasterXML](http://wiki.fasterxml.com/JacksonHome) (Apache 2.0 licence)
@@ -16,18 +16,30 @@ Requirements:
 
 Built with [Gradle 2.11](http://gradle.org).
 
-Twitter OAuth credentials must be available in a properties file based on the
-provided `twitter.properties-template` in the project's root directory. Support
-for running behind a proxy is also there, based on Twitter4J's support. For
-further information see [http://twitter4j.org/en/configuration.html]().
-
 ## To Build
+
+The Gradle wrapper has been included, so it's not necessary for you to have Gradle
+installed - it will install itself as part of the build process. All that is required is
+the Java Development Kit.
 
 By running
 
-`$ gradle installDist`
+`$ ./gradlew installDist` or `$ gradlew.bat installDist`
 
 you will create an installable copy of the app in `PROJECT_ROOT/build/get-twitter-user`.
+
+## Configuration
+
+Twitter OAuth credentials must be available in a properties file based on the
+provided `twitter.properties-template` in the project's root directory. Copy the
+template file to a properties file (the default is `twitter.properties` in the same
+directory), and edit it with your Twitter app credentials. For further information see
+[http://twitter4j.org/en/configuration.html]().
+
+If running the app behind a proxy or filewall, copy the `proxy.properties-template`
+file to a file named `proxy.properties` and set the properties inside to your proxy
+credentials. If you feel uncomfortable putting your proxy password in the file, leave
+it commented and the app will ask for the password.
 
 ## Usage
 From within `PROJECT_ROOT/build/install/get-twitter-user`:
