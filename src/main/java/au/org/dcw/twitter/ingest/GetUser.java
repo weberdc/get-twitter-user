@@ -52,6 +52,7 @@ import java.util.Properties;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.TreeSet;
+import java.util.stream.Collectors;
 
 import javax.imageio.ImageIO;
 
@@ -229,8 +230,11 @@ public final class GetUser {
             int faveCount = fetchFavourites(twitter, userDir + "/favourites", urlsMentioned, mediaToFetch);
 
             // Write out the mentioned URLs
-            ObjectMapper json = new ObjectMapper();
-            saveJSON(json.writeValueAsString(urlsMentioned), userDir + "/urls_mentioned.json");
+            stripEmptyUrlSets(urlsMentioned);
+            if (! urlsMentioned.isEmpty()) {
+                ObjectMapper json = new ObjectMapper();
+                saveJSON(json.writeValueAsString(urlsMentioned), userDir + "/urls_mentioned.json");
+            }
 
             // Retrieve media
             int mediaCount = fetchMedia(mediaToFetch, userDir + "/media");
@@ -245,6 +249,15 @@ public final class GetUser {
             te.printStackTrace();
             System.out.println("Failed to get timeline: " + te.getMessage());
             System.exit(-1);
+        }
+    }
+
+    private void stripEmptyUrlSets(Map<Long, Set<String>> urlsMentioned) {
+        Set<Long> toRemove = urlsMentioned.keySet().stream()
+                                          .filter (k -> urlsMentioned.get(k).isEmpty())
+                                          .collect(Collectors.toSet());
+        for (Long id : toRemove) {
+            urlsMentioned.remove(id);
         }
     }
 
@@ -337,7 +350,7 @@ public final class GetUser {
                     fetched++;
                     System.out.println(" SUCCESS");
                 } catch (IllegalArgumentException | IOException e) {
-                    System.out.println(" FAIL - Skipping");
+                    System.out.println(" FAIL(" + e.getMessage() + ") - Skipping");
                 }
             }
         }
