@@ -14,7 +14,7 @@ Requirements:
  + [FasterXML](http://wiki.fasterxml.com/JacksonHome) (Apache 2.0 licence)
  + [jcommander](http://jcommander.org) (Apache 2.0 licence)
 
-Built with [Gradle 2.11](http://gradle.org).
+Built with [Gradle 2.12](http://gradle.org).
 
 ## To Build
 
