@@ -202,7 +202,7 @@ public final class GetUser {
         twitter.addRateLimitStatusListener(rateLimitStatusListener);
 
         String name = screenName == null ? "user " + userID : "@" + screenName;
-        System.out.println("Saving profile and timeline for " + name + ".");
+        System.out.println("Retrieving profile and timeline for " + name + ".");
 
         try {
             // Determine the user's screen name
