@@ -1,9 +1,13 @@
-# HTTP proxy server host name
+# HTTP(S) proxy server host name
 http.proxyHost = my-proxy.mydomain.com
-#HTTP proxy server port
+https.proxyHost = my-proxy.mydomain.com
+#HTTP(S) proxy server port
 http.proxyPort = 8080
-# HTTP proxy server user name
+https.proxyPort = 8080
+# HTTP(S) proxy server user name
 http.proxyUser = my-proxy-username
-# HTTP proxy server password
+https.proxyUser = my-proxy-username
+# HTTP(S) proxy server password
 # If this line is left commented, the app will ask for the password.
 #http.proxyPassword = my-proxy-password
+#https.proxyPassword = my-proxy-password
