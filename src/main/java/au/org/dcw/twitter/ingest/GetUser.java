@@ -570,6 +570,7 @@ public final class GetUser {
             if (success && !properties.containsKey("http.proxyPassword")) {
                 char[] password = System.console().readPassword("Please type in your proxy password: ");
                 properties.setProperty("http.proxyPassword", new String(password));
+                properties.setProperty("https.proxyPassword", new String(password));
             }
             properties.forEach((k, v) -> System.setProperty(k.toString(), v.toString()));
         }
