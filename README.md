@@ -2,7 +2,7 @@
 
 Author: **Derek Weber** (with many thanks to [http://twitter4j.org]() examples)
 
-Last updated: **2016-03-17**
+Last updated: **2016-03-23**
 
 Simple app to retrieve the profile, tweets (as many as possible), and favourited
 tweets for a given user, specified by screen name or Twitter user identifier.
@@ -28,6 +28,13 @@ By running
 
 you will create an installable copy of the app in `PROJECT_ROOT/build/get-twitter-user`.
 
+Use the target `distZip` to make a distribution in `PROJECT_ROOT/build/distributions`
+or the target `timestampedDistZip` to add a timestamp to the distribution archive filename.
+
+To also include your own local `twitter.properties` file with your Twitter credentials,
+use the target `privilegedDistZip` to make a special distribution in `PROJECT_ROOT/build/distributions` that starts with .
+
+
 ## Configuration
 
 Twitter OAuth credentials must be available in a properties file based on the
@@ -39,11 +46,13 @@ directory), and edit it with your Twitter app credentials. For further informati
 If running the app behind a proxy or filewall, copy the `proxy.properties-template`
 file to a file named `proxy.properties` and set the properties inside to your proxy
 credentials. If you feel uncomfortable putting your proxy password in the file, leave
-it commented and the app will ask for the password.
+the password-related ones commented and the app will ask for the password.
 
 ## Usage
-From within `PROJECT_ROOT/build/install/get-twitter-user`:
-```
+If you've just downloaded the binary distribution, do this from within the unzipped
+archive (i.e. in the `get-twitter-user` directory). Otherwise, if you've just built
+the app from source, do this from within `PROJECT_ROOT/build/install/get-twitter-user`:
+<pre>
 Usage: bin/get-twitter-user[.bat] [options]
   Options:
      -c, --credentials
@@ -65,10 +74,14 @@ Usage: bin/get-twitter-user[.bat] [options]
      -debug
          Debug mode
          Default: false
-```
+</pre>
 
-Running the app with a given Twitter screen name, e.g. `weberdc`, will create
-a directory `output/weberdc` and download:
+Run the app with your desired Twitter screen name, e.g. `weberdc`:
+<pre>
+prompt> bin/get-twitter-user --screen-name weberdc --include-media --include-favourite-media
+</pre>
+
+This will create a directory `output/weberdc` and download the following:
 
  + `@weberdc`'s profile to `output/weberdc/profile.json`
  + `@weberdc`'s tweets, one per file, to `output/weberdc/statuses/`
@@ -77,4 +90,4 @@ a directory `output/weberdc` and download:
 
 Attempts have been made to account for Twitter's rate limits, so at times the
 app will pause, waiting until the rate limit has refreshed. It reports how long
-it will wait.
+it will wait when it does have to pause.

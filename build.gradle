@@ -17,6 +17,7 @@
 apply plugin: 'java'
 apply plugin: 'application'
 apply plugin: 'idea'
+apply plugin: 'distribution'
 
 mainClassName = 'au.org.dcw.twitter.ingest.GetUser'
 
@@ -24,7 +25,7 @@ sourceCompatibility = 1.8
 targetCompatibility = 1.8
 
 jar {
-    baseName = 'twitter-ingest'
+    baseName = 'twitter-user-ingest'
     version =  '0.1'
 }
 
@@ -37,4 +38,34 @@ dependencies {
     compile("com.beust:jcommander:[1.48,)")
     compile("com.fasterxml.jackson.core:jackson-core:2.7.2")
     compile("com.fasterxml.jackson.core:jackson-databind:2.7.2")
+}
+
+def timestamp() {
+    def date = new Date()
+    return date.format('yyyyMMddHHmmss')
+}
+
+distributions {
+    main {
+        contents {
+            from { 'README.md' }
+            from { 'LICENSE' }
+            from { 'twitter.properties-template' }
+            from { 'proxy.properties-template' }
+        }
+    }
+    timestamped {
+        baseName = project.name + '-SNAPSHOT-' + timestamp()
+        contents {
+            with main.contents
+        }
+    }
+    privileged {
+        baseName = project.name + '_with-credentials-SNAPSHOT-' + timestamp()
+        contents {
+            with main.contents
+            // include own twitter credentials
+            from { 'twitter.properties' }
+        }
+    }
 }
