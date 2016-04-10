@@ -23,8 +23,6 @@ import twitter4j.ExtendedMediaEntity;
 import twitter4j.MediaEntity;
 import twitter4j.Paging;
 import twitter4j.RateLimitStatus;
-import twitter4j.RateLimitStatusEvent;
-import twitter4j.RateLimitStatusListener;
 import twitter4j.Status;
 import twitter4j.Twitter;
 import twitter4j.TwitterException;
@@ -52,6 +50,13 @@ import java.util.Properties;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.TreeSet;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 import javax.imageio.ImageIO;
@@ -69,6 +74,11 @@ import javax.imageio.ImageIO;
 public final class GetUser {
 
     public static final int TWEET_BATCH_SIZE = 200;
+    public static final String API_FETCH_PROFILE = "/users/show/:id";
+
+    private final ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
+    private long delay; // most recent delay for scheduled tasks
+    private Twitter twitter;
 
     @Parameter(names = {"-s", "--screen-name"}, description = "Twitter screen name")
     private String screenName;
@@ -92,43 +102,72 @@ public final class GetUser {
     @Parameter(names = {"-f", "--include-favourite-media"}, description = "Include media from favourite tweets")
     private boolean includeFaveMedia = false;
 
-    /**
-     * Listener to pay attention to when the Twitter's rate limit is being approached or breached.
-     */
-    RateLimitStatusListener rateLimitStatusListener = new RateLimitStatusListener() {
-        @Override
-        public void onRateLimitStatus(RateLimitStatusEvent event) {
-            pauseIfNecessary(event.getRateLimitStatus());
-        }
 
-        @Override
-        public void onRateLimitReached(RateLimitStatusEvent event) {
-            pauseIfNecessary(event.getRateLimitStatus());
+    /**
+     * Used collect the result of a call to the Twitter API and also its
+     * raw JSON form, which is not available from other threads (and so must
+     * be collected at the time the call to the API returns.
+     *
+     * @param <T> The Twitter4J type of the result from the API call
+     */
+    class Wrapper<T> {
+        public T value;
+        public String rawJSON;
+
+        public Wrapper() {}
+        public Wrapper(T value, String rawJSON) {
+            this.value = value;
+            this.rawJSON = rawJSON;
         }
+    }
+
+    /**
+     * A task to fetch a user's Twitter profile which relies on {@link #screenName},
+     * {@link #userID} and {@link #twitter}.
+     */
+    private final Callable<Wrapper<User>> fetchProfileTask = () -> {
+        System.out.println("Fetching profile at " + new Date());
+        Wrapper<User> user = new Wrapper();
+        if (screenName != null) {
+            user.value = twitter.showUser(screenName);
+            userID = Long.valueOf(user.value.getId());
+        } else if (userID != null) {
+            user.value = twitter.showUser(userID.longValue());
+            screenName = user.value.getScreenName();
+        }
+        if (user != null) {
+            user.rawJSON = TwitterObjectFactory.getRawJSON(user.value);
+        }
+        System.out.println("Profile fetched: " + (user.value == null ? "FAILED" : "SUCCESS"));
+        return user;
     };
 
     /**
-     * If the provided {@link RateLimitStatus} indicates that we are about to break the rate
-     * limit, in terms of number of calls or time window, then sleep for the rest of the period.
-     *
-     * @param status The current status of the our calls to Twitter
+     * Builds a task to fetch page {@code pageNum} of a user's tweets, relying on
+     * {@link #twitter} and {@link #screenName}.
      */
-    protected void pauseIfNecessary(RateLimitStatus status) {
-        if (status == null)
-            return;
+    private Callable<List<Wrapper<Status>>> collectTweetsTask(final int pageNum) {
+        return  () -> {
+            List<Status> returnedTweets = twitter.getUserTimeline(screenName, new Paging(pageNum, TWEET_BATCH_SIZE));
 
-        int secondsUntilReset = status.getSecondsUntilReset();
-        int callsRemaining = status.getRemaining();
-        if (secondsUntilReset < 10 || callsRemaining < 10) {
-            int untilReset = status.getSecondsUntilReset() + 5;
-            System.out.println("Rate limit reached. Waiting " + untilReset + " seconds starting at " + new Date() + "...");
-            try {
-                Thread.sleep(untilReset * 1000);
-            } catch (InterruptedException e) {
-                e.printStackTrace();
-            }
-            System.out.println("Resuming...");
-        }
+            return returnedTweets.stream()
+                                 .map(tweet -> new Wrapper<>(tweet, TwitterObjectFactory.getRawJSON(tweet)))
+                                 .collect(Collectors.toList());
+        };
+    }
+
+    /**
+     * A task to fetch page {@code pageNum} of a user's favourite tweets, relying on
+     * {@link #twitter} and {@link #screenName}.
+     */
+    private Callable<List<Wrapper<Status>>> collectFavesTask(final int pageNum) {
+        return  () -> {
+            List<Status> returnedTweets = twitter.getFavorites(screenName, new Paging(pageNum, TWEET_BATCH_SIZE));
+
+            return returnedTweets.stream()
+                                 .map(tweet -> new Wrapper<>(tweet, TwitterObjectFactory.getRawJSON(tweet)))
+                                 .collect(Collectors.toList());
+        };
     }
 
     /**
@@ -168,7 +207,11 @@ public final class GetUser {
             System.exit(-1);
         }
 
-        theApp.run();
+        try {
+            theApp.run();
+        } finally {
+            theApp.shutdownExecutorSafely();
+        }
     }
 
     /**
@@ -191,6 +234,7 @@ public final class GetUser {
      * @throws IOException if there's a problem talking to Twitter or writing JSON out.
      */
     public void run() throws IOException {
+
         // clean screenName of a leading @ symbol
         if (screenName != null && screenName.startsWith("@")) {
             screenName = screenName.substring(1);
@@ -198,36 +242,35 @@ public final class GetUser {
 
         reportConfiguration();
 
-        Twitter twitter = new TwitterFactory(buildTwitterConfiguration()).getInstance();
-        twitter.addRateLimitStatusListener(rateLimitStatusListener);
+        twitter = new TwitterFactory(buildTwitterConfiguration()).getInstance();
 
         String name = screenName == null ? "user " + userID : "@" + screenName;
         System.out.println("Retrieving profile and timeline for " + name + ".");
 
         try {
             // Determine the user's screen name
-            User user = fetchProfile(twitter);
+            Wrapper<User> user = fetchProfile().get();
 
             // Use that to set up the output directories
             String userDir = rootOutputDir + "/" + screenName;
             new File(userDir).mkdirs();
 
             // Write out the user's profile
-            saveJSON(TwitterObjectFactory.getRawJSON(user), userDir + "/profile.json");
+            saveJSON(user.rawJSON, userDir + "/profile.json");
 
-            if (user.isProtected()) {
+            if (user.value.isProtected()) {
                 System.out.println("User @" + screenName + " is protected.");
-                System.exit(0);
+                return;
             }
 
             Map<Long, Set<String>> mediaToFetch = new TreeMap<>();
             Map<Long, Set<String>> urlsMentioned = new TreeMap<>();
 
             // Retrieve and store status updates, as many as possible, one per file
-            int tweetCount = fetchTweets(twitter, userDir + "/tweets", urlsMentioned, mediaToFetch);
+            int tweetCount = fetchTweets(userDir + "/tweets", urlsMentioned, mediaToFetch);
 
             // Retrieve favourites
-            int faveCount = fetchFavourites(twitter, userDir + "/favourites", urlsMentioned, mediaToFetch);
+            int faveCount = fetchFavourites(userDir + "/favourites", urlsMentioned, mediaToFetch);
 
             // Write out the mentioned URLs
             stripEmptyUrlSets(urlsMentioned);
@@ -242,16 +285,44 @@ public final class GetUser {
             // Report findings
             reportFindings(userDir, tweetCount, faveCount, mediaCount);
 
-        } catch (IOException ioe) {
-            ioe.printStackTrace();
-            System.out.println("Failed to store JSON: " + ioe.getMessage());
         } catch (TwitterException te) {
             te.printStackTrace();
             System.out.println("Failed to get timeline: " + te.getMessage());
-            System.exit(-1);
+        } catch (InterruptedException e) {
+            throw new IllegalStateException(e);
+        } catch (ExecutionException e) {
+            System.err.println("Scheduled call was cancelled somehow");
+            e.printStackTrace();
         }
     }
 
+    /**
+     * Shuts down the {@link #executor} nicely, giving it an opportunity to clean up after itself.
+     */
+    private void shutdownExecutorSafely() {
+        try {
+            System.out.println("attempt to shutdown executor");
+            executor.shutdown();
+            executor.awaitTermination(5, TimeUnit.SECONDS);
+        }
+        catch (InterruptedException e) {
+            System.err.println("tasks interrupted");
+        }
+        finally {
+            if (!executor.isTerminated()) {
+                System.err.println("cancel non-finished tasks");
+            }
+            executor.shutdownNow();
+            System.out.println("shutdown finished");
+        }
+    }
+
+    /**
+     * Removes any entries from the {@code urlsMentioned} map where the value associated
+     * with a key is an empty set.
+     *
+     * @param urlsMentioned The map of Tweet IDs to sets of URLs mentioned in the Tweet
+     */
     private void stripEmptyUrlSets(Map<Long, Set<String>> urlsMentioned) {
         Set<Long> toRemove = urlsMentioned.keySet().stream()
                                           .filter (k -> urlsMentioned.get(k).isEmpty())
@@ -299,7 +370,6 @@ public final class GetUser {
      * @throws IOException if there's an error loading the application's {@link #credentialsFile}.
      */
     private Configuration buildTwitterConfiguration() throws IOException {
-        // TODO find a better name than credentials, given it might contain proxy info
         Properties credentials = loadCredentials(credentialsFile);
 
         ConfigurationBuilder conf = new ConfigurationBuilder();
@@ -376,7 +446,6 @@ public final class GetUser {
      * Fetch the tweets of the user and save them to the {@code tweetsDir}. Also records URLs
      * mentioned, and specifically ones that refer to media.
      *
-     * @param twitter       the Twitter API instance
      * @param tweetsDir     the directory to which to save tweets
      * @param urlsMentioned a map of tweet ID to a set of URLs mentioned to update
      * @param mediaToFetch  a map of tweet ID to a set of URLs to media mentioned to update
@@ -384,18 +453,21 @@ public final class GetUser {
      * @throws TwitterException if an error occurs talking to the Twitter API
      * @throws IOException if an error occurs talking to the network or the file system
      */
-    private int fetchTweets(Twitter twitter, String tweetsDir, Map<Long, Set<String>> urlsMentioned,
-                            Map<Long, Set<String>> mediaToFetch) throws TwitterException, IOException {
+    private int fetchTweets(String tweetsDir, Map<Long, Set<String>> urlsMentioned,
+                            Map<Long, Set<String>> mediaToFetch)
+        throws TwitterException, IOException, ExecutionException, InterruptedException {
         new File(tweetsDir).mkdirs();
 
-        int i = 1, tweetCount = 0;
-        List<Status> tweets = twitter.getUserTimeline(screenName, new Paging(i++, TWEET_BATCH_SIZE));
+        int pageNum = 1; // reset the page number
+        int tweetCount = 0;
+        List<Wrapper<Status>> tweets = schedule("/statuses/user_timeline", collectTweetsTask(pageNum)).get();
+
         while (tweets.size() > 0) {
-            pauseIfNecessary(tweets.get(0).getRateLimitStatus());
             processTweets(tweets, tweetsDir, urlsMentioned, mediaToFetch, includeMedia);
             tweetCount += tweets.size();
             System.out.println(tweetCount + " tweets retrieved...");
-            tweets = twitter.getUserTimeline(screenName, new Paging(i++, TWEET_BATCH_SIZE));
+            pageNum++;
+            tweets = schedule("/statuses/user_timeline", collectTweetsTask(pageNum)).get();
         }
         return tweetCount;
     }
@@ -404,7 +476,6 @@ public final class GetUser {
      * Fetch the favourite tweets of the user and save them to the {@code favesDir}. Also
      * records URLs mentioned, and specifically ones that refer to media.
      *
-     * @param twitter       the Twitter API instance
      * @param favesDir      the directory to which to save favourited tweets
      * @param urlsMentioned a map of tweet ID to a set of URLs mentioned to update
      * @param mediaToFetch  a map of tweet ID to a set of URLs to media mentioned to update
@@ -412,19 +483,21 @@ public final class GetUser {
      * @throws TwitterException if an error occurs talking to the Twitter API
      * @throws IOException if an error occurs talking to the network or the file system
      */
-    private int fetchFavourites(Twitter twitter, String favesDir, Map<Long, Set<String>> urlsMentioned,
-                                Map<Long, Set<String>> mediaToFetch) throws TwitterException, IOException {
+    private int fetchFavourites(String favesDir, Map<Long, Set<String>> urlsMentioned,
+                                Map<Long, Set<String>> mediaToFetch)
+        throws TwitterException, IOException, ExecutionException, InterruptedException {
         new File(favesDir).mkdirs();
 
-        int i = 1;
+        int pageNum = 1;
         int faveCount = 0;
-        List<Status> faves = twitter.getFavorites(screenName, new Paging(i++, TWEET_BATCH_SIZE));
+        List<Wrapper<Status>> faves = schedule("/favorites/list", collectFavesTask(pageNum)).get();
+
         while (faves.size() > 0) {
-            pauseIfNecessary(faves.get(0).getRateLimitStatus());
             processTweets(faves, favesDir, urlsMentioned, mediaToFetch, includeFaveMedia);
             faveCount += faves.size();
             System.out.println(faveCount + " favourite tweets retrieved...");
-            faves = twitter.getFavorites(screenName, new Paging(i++, TWEET_BATCH_SIZE));
+            pageNum++;
+            faves = schedule("/favorites/list", collectFavesTask(pageNum)).get();
         }
         return faveCount;
     }
@@ -441,19 +514,19 @@ public final class GetUser {
      * @param inclMediaURLs if true, tweets will be examined for attached media
      * @throws IOException if an error occurs writing to the file system
      */
-    private void processTweets(List<Status> tweets, String tweetsDir, Map<Long, Set<String>> urlsMentioned, Map<Long,
-                               Set<String>> mediaToFetch, boolean inclMediaURLs)
+    private void processTweets(final List<Wrapper<Status>> tweets, final String tweetsDir,
+                               final Map<Long, Set<String>> urlsMentioned,
+                               final Map<Long, Set<String>> mediaToFetch, final boolean inclMediaURLs)
         throws IOException {
         new File(tweetsDir).mkdirs(); // make sure
 
-        for (Status tweet : tweets) {
-            String rawJSON = TwitterObjectFactory.getRawJSON(tweet);
-            String fileName = tweetsDir + "/" + tweet.getId() + ".json";
-            saveJSON(rawJSON, fileName);
+        for (Wrapper<Status> tweet : tweets) {
+            String fileName = tweetsDir + "/" + tweet.value.getId() + ".json";
+            saveJSON(tweet.rawJSON, fileName);
 
-            associateURLsWithTweet(tweet, collectMentionedURLs(tweet), urlsMentioned);
+            associateURLsWithTweet(tweet.value, collectMentionedURLs(tweet.value), urlsMentioned);
             if (inclMediaURLs) {
-                collectMediaURLs(tweet, mediaToFetch);
+                collectMediaURLs(tweet.value, mediaToFetch);
             }
         }
     }
@@ -525,22 +598,74 @@ public final class GetUser {
      * {@link #screenName} or {@link #userID} to do it. The field not used for lookup
      * is populated after the profile is found.
      *
-     * @param twitter the Twitter API object
      * @return the Twitter4j {@link User profile} of the specified user
      * @throws TwitterException if an error occurs talking to Twitter
      */
-    private User fetchProfile(Twitter twitter) throws TwitterException {
-        User user = null;
-        if (screenName != null) {
-            user = twitter.showUser(screenName);
-            userID = Long.valueOf(user.getId());
-        } else if (userID != null) {
-            user = twitter.showUser(userID.longValue());
-            screenName = user.getScreenName();
+    private Future<Wrapper<User>> fetchProfile()
+        throws TwitterException, ExecutionException, InterruptedException {
+        return schedule(API_FETCH_PROFILE, fetchProfileTask);
+    }
+
+    /**
+     * Schedules the given {@code apiCall} on the {@link #executor}. A test prior to
+     * scheduling is done to check the rate limit status of the API call, as defined
+     * by {@code api}.
+     *
+     * @param api     The Twitter API being called
+     * @param apiCall The task calling the API and marshalling the return value
+     * @param <T>     The type of the value returned by the API call
+     * @return        The value returned from the Twitter API call
+     * @throws TwitterException     if there is an error talking to Twitter's API
+     * @throws ExecutionException   if there's an error scheduling the task
+     * @throws InterruptedException if the executor is interrupted
+     */
+    private <T> ScheduledFuture<T> schedule(final String api, final Callable<T> apiCall)
+        throws TwitterException, ExecutionException, InterruptedException {
+
+        // First check how close we are to our rate limit for this particular call.
+        // Because this check is also rate limited, we defer its call to occur after the previous task
+        Callable<Long> rateLimitCheck = () -> {
+            String resource = api.substring(1, api.indexOf('/', 1)); // "/users/show/:id" -> "users"
+            Map<String, RateLimitStatus> limits = twitter.getRateLimitStatus(resource); // just get the info we need
+            return getTimeToDefer(limits.get(api));
+        };
+
+        if (debug)
+            System.out.printf("Checking rate limit for %s in %d seconds from %s\n", api, delay, new Date());
+
+        delay = executor.schedule(rateLimitCheck, delay, TimeUnit.SECONDS).get();
+
+        System.out.println("Scheduling: " + api);
+        if (delay != 0) {
+            System.out.printf("Delaying by %d seconds, starting at %s\n", delay, new Date());
+            delay += 5;
         }
-        if (user != null)
-            pauseIfNecessary(user.getRateLimitStatus());
-        return user;
+
+        // If the api call has a delay, then once it's executed there should be no more delay
+        // and if there is our rate limit check will be delayed needlessly.
+        Callable<T> delayResetter = () -> {
+            T result = apiCall.call();
+            delay = 0;
+            return result;
+        };
+
+        return executor.schedule(delayResetter, delay, TimeUnit.SECONDS);
+    }
+
+    /**
+     * Based on the provided {@link RateLimitStatus}, this determines how long to defer the
+     * next API call task.
+     *
+     * @param rateInfo the most recently received RateLimitStatus
+     * @return The time in seconds to delay the next scheduled task
+     */
+    protected long getTimeToDefer(RateLimitStatus rateInfo) {
+        if (debug)
+            System.out.println("  calls remaining " + rateInfo.getRemaining());
+
+        return rateInfo.getRemaining() <= 0 // a little breathing room
+               ? rateInfo.getSecondsUntilReset()
+               : 0;
     }
 
     /**
@@ -556,6 +681,15 @@ public final class GetUser {
         return properties;
     }
 
+    /**
+     * Loads the proxy properties from a file {@code "./proxy.properties"}.
+     * If {@code "http.proxyPassword"} is not provided, it is asked for on
+     * {@code stdin}, and can be typed in at runtime. The properties are set
+     * into the System properties as well as returned for inclusion into the
+     * Twitter configuration.
+     *
+     * @return A Properties instance with the supplied proxy properties
+     */
     private static Properties loadProxyProperties() {
         Properties properties = new Properties();
         String proxyFile = "./proxy.properties";
