@@ -15,9 +15,19 @@
  */
 package au.org.dcw.twitter.ingest;
 
+import com.google.common.base.Preconditions;
+
 import com.beust.jcommander.JCommander;
 import com.beust.jcommander.Parameter;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.apache.commons.lang3.tuple.Pair;
+
+import org.apache.http.Header;
+import org.apache.http.HttpHeaders;
+import org.apache.http.HttpResponse;
+import org.apache.http.client.methods.HttpHead;
+import org.apache.http.impl.client.CloseableHttpClient;
+import org.apache.http.impl.client.HttpClientBuilder;
 
 import twitter4j.ExtendedMediaEntity;
 import twitter4j.MediaEntity;
@@ -43,6 +53,8 @@ import java.io.Reader;
 import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Date;
 import java.util.List;
 import java.util.Map;
@@ -75,6 +87,10 @@ public final class GetUser {
 
     public static final int TWEET_BATCH_SIZE = 200;
     public static final String API_FETCH_PROFILE = "/users/show/:id";
+    public static final int MOVED_PERMANENTLY = 301;
+    public static final int MOVED_TEMPORARILY = 302;
+    public static final int TEMPORARY_REDIRECT = 307;
+    private final CloseableHttpClient httpClient;
 
     private final ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
     private long delay; // most recent delay for scheduled tasks
@@ -212,6 +228,10 @@ public final class GetUser {
         } finally {
             theApp.shutdownExecutorSafely();
         }
+    }
+
+    public GetUser() {
+        this.httpClient = HttpClientBuilder.create().disableRedirectHandling().build();
     }
 
     /**
@@ -401,30 +421,31 @@ public final class GetUser {
     private int fetchMedia(Map<Long, Set<String>> mediaUrls, String mediaDir) {
         new File(mediaDir).mkdirs();
 
-        int fetched = 0;
-        int tweetCount = 0;
-        for (Map.Entry<Long, Set<String>> mediaUrl : mediaUrls.entrySet()) {
+        int[] fetched = { 0 };
+        int[] tweetCount = { 0 };
+        mediaUrls.entrySet().parallelStream().forEach(mediaUrl -> {
+//        for (Map.Entry<Long, Set<String>> mediaUrl : mediaUrls.entrySet()) {
             Long id = mediaUrl.getKey();
             Set<String> urls = mediaUrl.getValue();
-            tweetCount++;
+            tweetCount[0]++;
             int mediaCount = 1;
             for (String urlStr : urls) {
-                urlStr = tweak(urlStr);
-                System.out.printf("GET MEDIA %d/%d FROM %s ...", tweetCount, mediaUrls.size(), urlStr);
+                urlStr = expandSafe(tweak(urlStr));
+                System.out.printf("GET MEDIA %d/%d FROM %s ...", tweetCount[0], mediaUrls.size(), urlStr);
                 String ext = urlStr.substring(urlStr.lastIndexOf('.') + 1);
                 String filename = id + "-" + (mediaCount++);
                 try {
                     URL url = new URL(urlStr);
                     BufferedImage bi = ImageIO.read(url);
                     ImageIO.write(bi, ext, new File(mediaDir + "/" + filename + "." + ext));
-                    fetched++;
+                    fetched[0]++;
                     System.out.println(" SUCCESS");
                 } catch (IllegalArgumentException | IOException e) {
                     System.out.println(" FAIL(" + e.getMessage() + ") - Skipping");
                 }
             }
-        }
-        return fetched;
+        });
+        return fetched[0];
     }
 
     /**
@@ -440,6 +461,93 @@ public final class GetUser {
             urlStr = "https://i.imgur.com/download/" + imgId;
         }
         return urlStr;
+    }
+
+    /**
+     * Attempts to treat {@code urlArg} as a shortened URL and expand it to as many
+     * levels as it goes.
+     * <p>
+     * Many thanks to <a href="http://baeldung.com/unshorten-url-httpclient">http://baeldung.com/unshorten-url-httpclient</a>.
+     *
+     * @param urlArg
+     *            The potentially shorted URL
+     * @return The expanded form of the urlArg, or itself if it's not shortened
+     * @throws IOException
+     *            If an error occurs attempting to traverse the links
+     */
+    private String expandSafe(String urlArg) {
+        System.out.printf("Expanding %s\n", urlArg);
+        String originalUrl = urlArg;
+        String newUrl = null;
+        try {
+            newUrl = expandSingleLevelSafe(originalUrl).getRight();
+            List<String> alreadyVisited = new ArrayList(Arrays.asList(originalUrl, newUrl));
+            while (!originalUrl.equals(newUrl)) {
+                originalUrl = newUrl;
+                Pair<Integer, String> statusAndUrl = expandSingleLevelSafe(originalUrl);
+                newUrl = statusAndUrl.getRight();
+                if (isARedirect(statusAndUrl.getLeft()) && alreadyVisited.contains(newUrl)) {
+                    System.err.printf("Likely a redirect loop: %s\n", urlArg);
+                    return urlArg;
+                }
+                alreadyVisited.add(newUrl);
+            }
+        } catch (IOException ioe) {
+            System.err.println("Problem resolving URLs: " + ioe.getMessage());
+            ioe.printStackTrace();
+            return urlArg;
+        }
+        return newUrl;
+    }
+
+    /**
+     * Expands a URL once if it is shortened.
+     * <p>
+     * Many thanks to <a href="http://baeldung.com/unshorten-url-httpclient">http://baeldung.com/unshorten-url-httpclient</a>.
+     *
+     * @param url
+     *            The URL to expand
+     * @return The expanded URL or the URL itself
+     * @throws IOException
+     *            If an error occurs attempting to retrieve the URL
+     */
+    private Pair<Integer, String> expandSingleLevelSafe(String url) throws IOException {
+        HttpHead request = null;
+        try {
+            request = new HttpHead(url);
+            HttpResponse httpResponse = httpClient.execute(request);
+
+            int statusCode = httpResponse.getStatusLine().getStatusCode();
+            if (!isARedirect(statusCode)) {
+                return Pair.of(statusCode, url);
+            }
+            Header[] headers = httpResponse.getHeaders(HttpHeaders.LOCATION);
+            Preconditions.checkState(headers.length == 1);
+            String newUrl = headers[0].getValue();
+
+            System.out.printf("HTTP response %d: %s -> %s\n", statusCode, url, newUrl);
+            return Pair.of(statusCode, newUrl);
+        } catch (IllegalStateException | IllegalArgumentException e) {
+            // missing LOCATION header or bogus character in the URL
+            return Pair.of(-1, url);
+        } finally {
+            if (request != null) {
+                request.releaseConnection();
+            }
+        }
+    }
+
+    /**
+     * Checks the HTTP response status {@code code} to see if it's a 301 (moved permanently),
+     * a 302 (moved temporarily) or a 307 (temporary redirect).
+     *
+     * @param code The status code of an HTTP response
+     * @return True if the code indicates that the response is a redirect.
+     */
+    protected static boolean isARedirect(int code) {
+        return code == MOVED_PERMANENTLY ||
+               code == MOVED_TEMPORARILY ||
+               code == TEMPORARY_REDIRECT;
     }
 
     /**
