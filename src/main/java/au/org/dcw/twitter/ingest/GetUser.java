@@ -16,12 +16,13 @@
 package au.org.dcw.twitter.ingest;
 
 import com.google.common.base.Preconditions;
+import com.google.common.collect.Lists;
 
 import com.beust.jcommander.JCommander;
 import com.beust.jcommander.Parameter;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.apache.commons.lang3.tuple.Pair;
 
+import org.apache.commons.lang3.tuple.Pair;
 import org.apache.http.Header;
 import org.apache.http.HttpHeaders;
 import org.apache.http.HttpResponse;
@@ -53,8 +54,6 @@ import java.io.Reader;
 import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Paths;
-import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Date;
 import java.util.List;
 import java.util.Map;
@@ -479,7 +478,7 @@ public final class GetUser {
         String newUrl = null;
         try {
             newUrl = expandSingleLevelSafe(originalUrl).getRight();
-            List<String> alreadyVisited = new ArrayList(Arrays.asList(originalUrl, newUrl));
+            List<String> alreadyVisited = Lists.newArrayList(originalUrl, newUrl);
             while (!originalUrl.equals(newUrl)) {
                 originalUrl = newUrl;
                 Pair<Integer, String> statusAndUrl = expandSingleLevelSafe(originalUrl);
