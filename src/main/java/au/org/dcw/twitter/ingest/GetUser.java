@@ -472,8 +472,6 @@ public final class GetUser {
      * @param urlArg
      *            The potentially shorted URL
      * @return The expanded form of the urlArg, or itself if it's not shortened
-     * @throws IOException
-     *            If an error occurs attempting to traverse the links
      */
     private String expandSafe(String urlArg) {
         System.out.printf("Expanding %s\n", urlArg);
