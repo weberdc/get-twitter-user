@@ -19,7 +19,6 @@ import com.beust.jcommander.JCommander;
 import com.beust.jcommander.Parameter;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
-import twitter4j.ExtendedMediaEntity;
 import twitter4j.MediaEntity;
 import twitter4j.Paging;
 import twitter4j.RateLimitStatus;
@@ -162,9 +161,7 @@ public final class GetUser {
         JCommander argsParser = new JCommander(theApp, args);
 
         if (!checkFieldsOf(theApp)) {
-            StringBuilder sb = new StringBuilder();
-            argsParser.usage(sb);
-            System.out.println(sb.toString());
+            argsParser.usage();
             System.exit(-1);
         }
 
@@ -474,8 +471,8 @@ public final class GetUser {
             }
         }
 
-        if (tweet.getExtendedMediaEntities().length > 0) {
-            for (ExtendedMediaEntity entity : tweet.getExtendedMediaEntities()) {
+        if (tweet.getMediaEntities().length > 0) {
+            for (MediaEntity entity : tweet.getMediaEntities()) {
                 switch (entity.getType()) {
                     case "video":
                         urls.add(entity.getVideoVariants()[0].getUrl());
